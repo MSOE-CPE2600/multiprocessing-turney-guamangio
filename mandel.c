@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include "jpegrw.h"
 
 // local routines
@@ -34,12 +35,24 @@ int main( int argc, char *argv[] )
 	int    image_height = 1000;
 	int    max = 1000;
 
+	//multiprocessor change
+	int numProcs = 1;
+	int movieMode = 0;
+	int totalFrames = 50;
+
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h"))!=-1) {
+	//The 'n' with M is telling the function that M doesn't have an arguement o it won't eat the other arguements. 
+	while((c = getopt(argc,argv,"Mn:n:x:y:s:W:H:m:o:h"))!=-1) {
 		switch(c) 
 		{
+			case 'M':
+				movieMode = 1;
+				break;
+			case 'n':
+				numProcs = atoi(optarg);
+				break;
 			case 'x':
 				xcenter = atof(optarg);
 				break;
@@ -68,6 +81,94 @@ int main( int argc, char *argv[] )
 		}
 	}
 
+	//This is the movie mode. (It's just generated 50 images).
+    if (movieMode) {
+
+        printf("Movie mode: generating %d frames using %d processes\n",
+                totalFrames, numProcs);
+
+		//assigns the amount of frames per each child.
+        int framesPerChild = totalFrames / numProcs;
+		//will see how much frames are left over to give to a child to work on.
+        int leftover = totalFrames % numProcs;
+		//array of pids made for the amount of children going to be made within the program.
+        pid_t pids[numProcs];
+
+        for (int i = 0; i < numProcs; i++) {
+
+            int start = i * framesPerChild;
+            int count = framesPerChild;
+
+			//checking for leftover images 
+            if (i == numProcs - 1){
+                count += leftover;
+			}
+
+			//creates a child
+            pid_t pid = fork();
+
+
+			//checks if creating a child caused an error.
+            if (pid < 0) {
+                perror("fork");
+                exit(1);
+            }
+
+			//what the child does.
+            if (pid == 0) {
+				// This loop is make sure that all the children don't run into each other.
+                for (int f = start; f < start + count; f++) {
+
+                    char outname[64];
+					// print the string and create the output name. 
+                    sprintf(outname, "mandel%d.jpg", f);
+
+					//changes the scale after each image for each child
+                    double scale = xscale * (0.98 * f);
+                    char scaleStr[32];
+                    sprintf(scaleStr, "%lf", scale);
+
+					//makes sure to set the x string and y string to make sure they aren't x everytime a child calls the program.
+					char xStr[32];
+					char yStr[32];
+					sprintf(xStr, "%lf", xcenter);
+					sprintf(yStr, "%lf", ycenter);
+
+					//changes max iterations if you want
+					char mIter[32];
+					sprintf(mIter, "%d", max);
+
+					//have the child run an instance of the program without hitting movie mode
+					//to not accidently run movie mode again infinitely.
+                    execl("./mandel", "mandel",
+                          "-x", xStr,
+                          "-y", yStr,
+                          "-s", scaleStr,
+                          "-o", outname,
+						  "-m", mIter,
+                          NULL);
+
+                    perror("execl failed");
+                    exit(1);
+                }
+                exit(0);
+            }
+
+			//places the pid of each child into this array
+            pids[i] = pid;
+        }
+
+		//This is where the parent will stay until it's children has finished making the movie.
+        for (int i = 0; i < numProcs; i++)
+			//array is used to see if each child has finished their image.
+            waitpid(pids[i], NULL, 0);
+
+        printf("Movie finished.\n");
+        return 0;
+    }
+
+	//nothing changes below here as this is what the child will do for each image.
+
 	// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
 	yscale = xscale / image_width * image_height;
 
@@ -92,22 +193,19 @@ int main( int argc, char *argv[] )
 	return 0;
 }
 
-
-
-
 /*
 Return the number of iterations at point x, y
 in the Mandelbrot space, up to a maximum of max.
 */
 
-int iterations_at_point( double x, double y, int max )
+int iterations_at_point(double x, double y, int max )
 {
 	double x0 = x;
 	double y0 = y;
 
 	int iter = 0;
 
-	while( (x*x + y*y <= 4) && iter < max ) {
+	while((x*x + y*y <= 4) && iter < max ) {
 
 		double xt = x*x - y*y + x0;
 		double yt = 2*x*y + y0;
@@ -170,6 +268,8 @@ void show_help()
 {
 	printf("Use: mandel [options]\n");
 	printf("Where options are:\n");
+	printf("-M          This is what enables movie mode, and to not let the child accidently inifinite loop the code.\n");
+	printf("-n <num>    This is the number of processors that you want to use to make the movie.\n");
 	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
 	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
 	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
