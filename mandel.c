@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <pthread.h>
 #include "jpegrw.h"
 
 // local routines
@@ -18,6 +19,47 @@ static int iterations_at_point( double x, double y, int max );
 static void compute_image( imgRawImage *img, double xmin, double xmax,
 									double ymin, double ymax, int max );
 static void show_help();
+
+//thread changes (global variable)
+int numThreads = 1;
+
+//The struct for the threads because it can only take in 1 argument
+typedef struct {
+    imgRawImage *img;
+    int startRow;
+    int endRow;
+    double xmin;
+    double xmax;
+    double ymin;
+    double ymax;
+    int max;
+	int width;
+	int height;
+} ThreadArgs;
+
+//added function for threading 
+void *thread_worker(void* arg){
+
+	ThreadArgs *t = (ThreadArgs*)arg;
+
+	// For every pixel in the image...
+	for(int j = t->startRow; j <= t->endRow; j++) {
+		for(int i = 0 ; i < t->width; i++) {
+
+			// Determine the point in x,y space for that pixel.
+			//using the struct to direct all the information from the struct tot the variable
+			double x = t->xmin + i * (t -> xmax- t->xmin)/ t->width;
+			double y = t->ymin + j * (t -> ymax- t->ymin)/ t->height;
+
+			// Compute the iterations at that point.
+			int iters = iterations_at_point(x,y,t->max);
+
+			// Set the pixel in the bitmap.
+			setPixelCOLOR(t->img,i,j,iteration_to_color(iters, t-> max));
+		}
+	}
+	return NULL;
+}
 
 
 int main( int argc, char *argv[] )
@@ -40,11 +82,12 @@ int main( int argc, char *argv[] )
 	int movieMode = 0;
 	int totalFrames = 50;
 
+
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
 	//The 'n' with M is telling the function that M doesn't have an arguement o it won't eat the other arguements. 
-	while((c = getopt(argc,argv,"Mn:n:x:y:s:W:H:m:o:h"))!=-1) {
+	while((c = getopt(argc,argv,"Mn:n:t:x:y:s:W:H:m:o:h"))!=-1) {
 		switch(c) 
 		{
 			case 'M':
@@ -52,6 +95,9 @@ int main( int argc, char *argv[] )
 				break;
 			case 'n':
 				numProcs = atoi(optarg);
+				break;
+			case 't':
+				numThreads = atoi(optarg);
 				break;
 			case 'x':
 				xcenter = atof(optarg);
@@ -219,6 +265,8 @@ int iterations_at_point(double x, double y, int max )
 	return iter;
 }
 
+
+
 /*
 Compute an entire Mandelbrot image, writing each point to the given bitmap.
 Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
@@ -226,28 +274,57 @@ Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
 
 void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
 {
-	int i,j;
 
 	int width = img->width;
 	int height = img->height;
 
-	// For every pixel in the image...
+	//The multithreading changes
+	int rowsPerThread =  height/numThreads;
+	int leftover2 = height%numThreads;
 
-	for(j=0;j<height;j++) {
 
-		for(i=0;i<width;i++) {
+	//threads created and the amount of them
+	pthread_t threads[numThreads];
+	ThreadArgs args[numThreads];
 
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
+	int currentStart = 0;
 
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
+	//places all the varibale that is used in this program into a struct to be used to make the image.
+	for (int t = 0; t < numThreads; t++) {
+        int thisRows = rowsPerThread;
+        if (t == numThreads - 1){
+            thisRows += leftover2;
 		}
+
+        args[t].img = img;
+
+        args[t].xmin = xmin;
+        args[t].xmax = xmax;
+        args[t].ymin = ymin;
+        args[t].ymax = ymax;
+
+        args[t].max = max;
+        args[t].width = width;
+        args[t].height = height;
+
+        args[t].startRow = currentStart;
+        args[t].endRow   = currentStart + thisRows - 1;
+
+        currentStart += thisRows;
+    }
+
+
+	//The start and the end of the threading 
+	for(int i = 0; i < numThreads; i++){
+		pthread_create(&threads[i], NULL, thread_worker, (void*) &args[i]);
 	}
+	for(int i = 0; i < numThreads; i++){
+		pthread_join(threads[i],NULL);
+	}
+
+
+
+
 }
 
 
@@ -270,6 +347,7 @@ void show_help()
 	printf("Where options are:\n");
 	printf("-M          This is what enables movie mode, and to not let the child accidently inifinite loop the code.\n");
 	printf("-n <num>    This is the number of processors that you want to use to make the movie.\n");
+	printf("-t <amo>    Thi is the number of threads that you want to use? (default=1) and (max amount = 20).\n");
 	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
 	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
 	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
