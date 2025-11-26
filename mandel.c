@@ -6,6 +6,15 @@
 //  Converted to use jpg instead of BMP and other minor changes
 //  
 ///
+
+/*
+*Filename: mandel.c
+*Name: Giovanni Guaman
+*Description: This is a mandel program that has an added feature of multithreading
+*Date: 11/25/2025
+*Course: CPE 2600
+*/
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -82,7 +91,6 @@ int main( int argc, char *argv[] )
 	int movieMode = 0;
 	int totalFrames = 50;
 
-
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
@@ -97,6 +105,10 @@ int main( int argc, char *argv[] )
 				numProcs = atoi(optarg);
 				break;
 			case 't':
+				if(atoi(optarg) > 20){
+					printf("Threads can't be greater than 20.\n");
+					return 0;
+				}
 				numThreads = atoi(optarg);
 				break;
 			case 'x':
@@ -129,11 +141,9 @@ int main( int argc, char *argv[] )
 
 	//This is the movie mode. (It's just generated 50 images).
     if (movieMode) {
+        printf("Movie mode: generating %d frames using %d processes\n", totalFrames, numProcs);
 
-        printf("Movie mode: generating %d frames using %d processes\n",
-                totalFrames, numProcs);
-
-		//assigns the amount of frames per each child.
+       //assigns the amount of frames per each child.
         int framesPerChild = totalFrames / numProcs;
 		//will see how much frames are left over to give to a child to work on.
         int leftover = totalFrames % numProcs;
@@ -141,18 +151,16 @@ int main( int argc, char *argv[] )
         pid_t pids[numProcs];
 
         for (int i = 0; i < numProcs; i++) {
-
             int start = i * framesPerChild;
             int count = framesPerChild;
 
 			//checking for leftover images 
-            if (i == numProcs - 1){
+            if (i == numProcs - 1) {
                 count += leftover;
-			}
+            }
 
 			//creates a child
             pid_t pid = fork();
-
 
 			//checks if creating a child caused an error.
             if (pid < 0) {
@@ -160,85 +168,58 @@ int main( int argc, char *argv[] )
                 exit(1);
             }
 
-			//what the child does.
+            //what the child does.
             if (pid == 0) {
+                
+			
 				// This loop is make sure that all the children don't run into each other.
                 for (int f = start; f < start + count; f++) {
-
                     char outname[64];
 					// print the string and create the output name. 
                     sprintf(outname, "mandel%d.jpg", f);
 
+                    // per-frame print using threads
+                    printf("Process %d generating frame %d (%s) using %d threads\n", getpid(), f, outname, numThreads);
+                    fflush(stdout);
+
 					//changes the scale after each image for each child
-                    double scale = xscale * (0.98 * f);
-                    char scaleStr[32];
-                    sprintf(scaleStr, "%lf", scale);
+                    double scale = xscale * (1.0 + 0.02 * f);
+                    double yscale_local = scale / image_width * image_height;
 
-					//makes sure to set the x string and y string to make sure they aren't x everytime a child calls the program.
-					char xStr[32];
-					char yStr[32];
-					sprintf(xStr, "%lf", xcenter);
-					sprintf(yStr, "%lf", ycenter);
+                    // Display the configuration of the image (child)
+                    printf("mandel: x=%lf y=%lf xscale=%lf yscale=%lf max=%d outfile=%s\n", xcenter, ycenter, scale, yscale, max, outfile);
+                    fflush(stdout);
 
-					//changes max iterations if you want
-					char mIter[32];
-					sprintf(mIter, "%d", max);
+                    imgRawImage *img = initRawImage(image_width, image_height);
+                    setImageCOLOR(img, 0);
 
-					//have the child run an instance of the program without hitting movie mode
-					//to not accidently run movie mode again infinitely.
-                    execl("./mandel", "mandel",
-                          "-x", xStr,
-                          "-y", yStr,
-                          "-s", scaleStr,
-                          "-o", outname,
-						  "-m", mIter,
-                          NULL);
+                    // compute the image (multithreaded)
+                    compute_image(img,
+                                  xcenter - scale/2, xcenter + scale/2,
+                                  ycenter - yscale_local/2, ycenter + yscale_local/2,
+                                  max);
 
-                    perror("execl failed");
-                    exit(1);
+                    storeJpegImageFile(img, outname);
+                    freeRawImage(img);
                 }
-                exit(0);
+                exit(0); // child done
             }
 
-			//places the pid of each child into this array
+            //places the pid of each child into this array
             pids[i] = pid;
         }
 
-		//This is where the parent will stay until it's children has finished making the movie.
-        for (int i = 0; i < numProcs; i++)
+        //This is where the parent will stay until it's children has finished making the movie.
+        for (int i = 0; i < numProcs; i++){
 			//array is used to see if each child has finished their image.
             waitpid(pids[i], NULL, 0);
+		}
+
 
         printf("Movie finished.\n");
         return 0;
     }
-
-	//nothing changes below here as this is what the child will do for each image.
-
-	// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
-	yscale = xscale / image_width * image_height;
-
-	// Display the configuration of the image.
-	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
-
-	// Create a raw image of the appropriate size.
-	imgRawImage* img = initRawImage(image_width,image_height);
-
-	// Fill it with a black
-	setImageCOLOR(img,0);
-
-	// Compute the Mandelbrot image
-	compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
-
-	// Save the image in the stated file.
-	storeJpegImageFile(img,outfile);
-
-	// free the mallocs
-	freeRawImage(img);
-
-	return 0;
 }
-
 /*
 Return the number of iterations at point x, y
 in the Mandelbrot space, up to a maximum of max.
@@ -359,5 +340,6 @@ void show_help()
 	printf("\nSome examples are:\n");
 	printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
 	printf("mandel -x -.38 -y -.665 -s .05 -m 100\n");
+	printf("mandel -n 10 -t 10 -x -0.5 -y -0.5 -s 0.2\n");
 	printf("mandel -x 0.286932 -y 0.014287 -s .0005 -m 1000\n\n");
 }
